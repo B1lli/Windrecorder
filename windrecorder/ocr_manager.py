@@ -2,6 +2,7 @@ import base64
 import datetime
 import os
 import shutil
+import threading
 import subprocess
 
 import cv2
@@ -124,16 +125,81 @@ def crop_iframe(directory):
 
 # OCR 分流器
 def ocr_image(img_input):
-    ocr_engine = config.ocr_engine
+    ocr_engine = "WeChatOCR"
     # print(f"ocr_manager: ocr_engine:{ocr_engine}")
     if ocr_engine == "Windows.Media.Ocr.Cli":
-        return ocr_image_ms(img_input)
+        ms_ocr_res = ocr_image_ms ( img_input )
+        return ms_ocr_res
     elif ocr_engine == "ChineseOCR_lite_onnx":
         if config.enable_ocr_chineseocr_lite_onnx:
             return ocr_image_col(img_input)
         else:
             print("ocr_manager: enable_ocr_chineseocr_lite_onnx is disabled. Fallback to Windows.Media.Ocr.Cli.")
             return ocr_image_ms(img_input)
+
+    elif ocr_engine == "WeChatOCR":
+        return ocr_image_wx(img_input)
+
+# OCR文本-WeChatOCR
+
+# 创建一个事件对象
+wx_ocr_complete_event = threading.Event()
+# 微信OCR结果全局变量
+wx_ocr_result = None
+# 微信OCR_manager全局变量
+ocr_manager = None
+
+# 从识别结果的json中提取字符串，拼接到一起
+def extract_text_from_json(json_data) :
+    # Extract the list of ocrResults from the JSON data
+    ocr_results = json_data.get ( 'ocrResult', [] )
+    # Initialize an empty list to hold the extracted text
+    texts = []
+    # Iterate through the ocrResults and extract the 'text' value from each one
+    for result in ocr_results :
+        text = result.get ( 'text', '' )
+        texts.append ( text )
+    # Join all the extracted text into a single string and return it
+    return ''.join ( texts )
+
+# WeChatOCR输出结果用的回调函数
+def ocr_result_callback(img_path,results: dict):
+    global wx_ocr_result
+    # 设置OCR结果
+    wx_ocr_result = extract_text_from_json(results)
+    # 设置事件，通知get_ocr_res_me函数结果已准备好
+    wx_ocr_complete_event.set()
+    # 重置事件，为下次调用准备
+    wx_ocr_complete_event.clear()
+
+# 初始化方法
+def initialize_WeChatOCR():
+    from wechat_ocr.ocr_manager import OcrManager, OCR_MAX_TASK_ID
+    wechat_ocr_dir = r"E:\WindRecorder\WeChatOCR\WeChatOCR.exe "
+    wechat_dir = r"E:\WindRecorder\WeChatOCR"
+    ocr_manager = OcrManager ( wechat_dir )
+    # 设置WeChatOcr目录
+    ocr_manager.SetExePath ( wechat_ocr_dir )
+    # 设置微信所在路径
+    ocr_manager.SetUsrLibDir ( wechat_dir )
+    # 设置ocr识别结果的回调函数
+    ocr_manager.SetOcrResultCallback ( ocr_result_callback )
+    # 启动ocr服务
+    ocr_manager.StartWeChatOCR ()
+    return ocr_manager
+
+# WeChatOCR的实际方法
+def ocr_image_wx(img_path):
+    global wx_ocr_result,ocr_manager
+    # 如果没启动WeChatOCR后端，就启动
+    if not ocr_manager:ocr_manager = initialize_WeChatOCR()
+    # 发送任务给OCR后端
+    ocr_manager.DoOCRTask(img_path)
+    # 等待ocr_result_callback设置事件
+    wx_ocr_complete_event.wait()
+    # 事件发生后，返回结果
+    print("** wx_ocr_result: ** : \n"+str(wx_ocr_result))
+    return wx_ocr_result
 
 
 # OCR文本-chineseOCRlite
